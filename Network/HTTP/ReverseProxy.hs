@@ -73,7 +73,8 @@ import           UnliftIO                       (MonadIO, liftIO, MonadUnliftIO,
 data ProxyDest = ProxyDest
     { pdHost :: !ByteString
     , pdPort :: !Int
-    } deriving (Read, Show, Eq, Ord, Generic)
+    , pdFurtherProxy :: !(Maybe HC.Proxy)
+    } deriving (Read, Show, Eq, Ord)
 
 -- | Set up a reverse proxy server, which will have a minimal overhead.
 --
@@ -111,7 +112,7 @@ rawProxyTo getDest appdata = do
             app $ runIdentity (readLens (const (Identity readData)) appdata)
 
 
-        Right (ProxyDest host port) -> liftIO $ DCN.runTCPClient (DCN.clientSettings port host) (withServer rsrc)
+        Right (ProxyDest host port _) -> liftIO $ DCN.runTCPClient (DCN.clientSettings port host) (withServer rsrc)
   where
     fromClient = DCN.appSource appdata
     toClient = DCN.appSink appdata
@@ -138,7 +139,7 @@ rawTcpProxyTo :: MonadIO m
            => ProxyDest
            -> AppData
            -> m ()
-rawTcpProxyTo (ProxyDest host port) appdata = liftIO $
+rawTcpProxyTo (ProxyDest host port _) appdata = liftIO $
     DCN.runTCPClient (DCN.clientSettings port host) withServer
   where
     withServer appdataServer = concurrently_
@@ -377,7 +378,7 @@ waiProxyToSettings getDest wps' manager req0 sendResponse = do
                 Nothing -> sendResponse $ WAI.responseLBS HT.status500 [] "timeBound"
     case edest of
         Left app -> maybe id timeBound (lpsTimeBound lps) $ app req0 sendResponse
-        Right (ProxyDest host port, req, secure) -> tryWebSockets wps host port req sendResponse $ do
+        Right (ProxyDest host port proxy, req, secure) -> tryWebSockets wps host port req sendResponse $ do
             let req' =
 #if MIN_VERSION_http_client(0, 5, 0)
                   HC.defaultRequest
@@ -397,6 +398,7 @@ waiProxyToSettings getDest wps' manager req0 sendResponse = do
                     , HC.requestHeaders = fixReqHeaders wps req
                     , HC.requestBody = body
                     , HC.redirectCount = 0
+                    , HC.proxy = proxy
                     }
                 body =
                     case WAI.requestBodyLength req of
